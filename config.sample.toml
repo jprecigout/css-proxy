@@ -1,0 +1,27 @@
+# Exemple de configuration du proxy : copier en config.toml puis adapter.
+# Chemin modifiable avec la variable CONFIG.
+# Les clés absentes prennent une valeur vide ("" pour le texte, 0 pour le port, [] pour les listes).
+# Une clé inconnue est refusée au démarrage.
+
+# Protocole des liens réécrits vers le proxy (http ou https).
+scheme = "http"
+
+# Hôte des liens réécrits vers le proxy.
+host = "localhost"
+
+# Port d'écoute du proxy, repris aussi dans les liens réécrits.
+port = 3000
+
+# Site relayé par le proxy (schéma + hôte, sans chemin).
+target = "https://www.example.com"
+
+# Flux RSS affiché sur /articles.
+feed_url = "https://www.example.com/rss.xml"
+
+# CSS ajouté dans le <head> de chaque page relayée.
+inject_css = """
+.example-class { display: block !important; }
+"""
+
+# Sélecteurs CSS des éléments retirés du HTML.
+remove_css = [".example-banner", ".cookie-wall"]
