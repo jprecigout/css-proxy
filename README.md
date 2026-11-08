@@ -33,9 +33,8 @@ Toute la configuration est dans un fichier TOML, `config.toml` par défaut. Voir
 
 | Clé          | Type            | Rôle                                                                 |
 |--------------|-----------------|----------------------------------------------------------------------|
-| `scheme`     | texte           | Protocole des liens réécrits vers le proxy (`http` ou `https`).     |
-| `host`       | texte           | Hôte des liens réécrits vers le proxy.                               |
-| `port`       | entier          | Port d'écoute du proxy, repris aussi dans les liens réécrits.        |
+| `public_url` | texte           | Adresse publique du proxy, avec un éventuel sous-chemin. Vide : `http://localhost:<port>`. |
+| `port`       | entier          | Port d'écoute du proxy.                                              |
 | `target`     | texte           | Site relayé (schéma + hôte, sans chemin).                            |
 | `feed_url`   | texte           | Adresse du flux RSS affiché sur `/articles`.                         |
 | `inject_css` | texte           | CSS ajouté dans un `<style>` à la fin du `<head>`.                   |
@@ -46,7 +45,7 @@ Quelques points à connaître :
 - Une clé absente prend une valeur vide : `""`, `0` ou `[]`. Avec `port` absent, le proxy écoute sur un port aléatoire.
 - Une clé inconnue, par exemple une faute de frappe, est refusée au démarrage.
 - Les sélecteurs de `remove_css` sont vérifiés au démarrage. Un sélecteur invalide arrête le programme avec un message d'erreur.
-- `scheme`, `host` et `port` doivent correspondre à l'adresse sous laquelle le proxy est joignable : c'est elle qui sert à réécrire les liens de `/articles`.
+- `public_url` doit être l'adresse sous laquelle le proxy est joignable : les liens de `/articles` sont construits à partir d'elle.
 
 ## Docker
 
@@ -59,6 +58,24 @@ docker run --rm -p 3000:3000 -v ./config.toml:/app/config.toml css-proxy
 ```
 
 L'image contient une copie du `config.toml` présent au moment du build. Le `-v` permet de la remplacer sans reconstruire l'image. Si tu changes `port`, adapte aussi le `-p`.
+
+## Derrière un reverse-proxy, sous un sous-chemin
+
+Le proxy peut être servi sous un chemin, par exemple `https://serveur/css-proxy/`. Il faut alors :
+
+- mettre ce chemin dans `public_url`, par exemple `public_url = "https://serveur/css-proxy"` ;
+- faire retirer ce préfixe par le reverse-proxy avant de transmettre la requête (`handle_path` avec Caddy).
+
+Dans les pages relayées, les liens absolus (`/chemin`) des attributs `href`, `src` et `action` sont alors préfixés par le sous-chemin. Les adresses construites en JavaScript ou dans les `url()` des feuilles de style ne sont pas réécrites.
+
+Exemple avec Caddy :
+
+```
+redir /css-proxy /css-proxy/
+handle_path /css-proxy/* {
+	reverse_proxy css-proxy:3000
+}
+```
 
 ## Fonctionnement
 

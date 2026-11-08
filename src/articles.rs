@@ -51,14 +51,14 @@ fn parse_feed(xml: &str, cfg: &Arc<Config>) -> Result<Feed, String> {
             .to_owned()
     };
 
-    // Remplace l'hôte d'une URL ; None si l'URL ou l'hôte est invalide.
+    // Fait passer un lien par le proxy : chemin et paramètres conservés, ajoutés
+    // à l'adresse publique (et à son sous-chemin). None si le lien est invalide.
     let replace_host = |link: &str| {
-        Url::parse(&link).ok().and_then(|mut url| {
-            url.set_scheme(&cfg.scheme).ok()?;
-            url.set_host(Some(&cfg.host)).ok()?;
-            url.set_port(Some(cfg.port)).ok()?;
-            Some(url.to_string())
-        })
+        let src = Url::parse(link).ok()?;
+        let mut url = cfg.public_url.clone();
+        url.set_path(&format!("{}{}", cfg.base_path, src.path()));
+        url.set_query(src.query());
+        Some(url.to_string())
     };
 
     // <channel> porte les informations de la source ; sans lui, ce n'est pas un flux RSS.

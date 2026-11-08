@@ -3,13 +3,12 @@
 # Les clés absentes prennent une valeur vide ("" pour le texte, 0 pour le port, [] pour les listes).
 # Une clé inconnue est refusée au démarrage.
 
-# Protocole des liens réécrits vers le proxy (http ou https).
-scheme = "http"
+# Adresse publique du proxy, avec un éventuel sous-chemin (ex. https://serveur/css-proxy).
+# Sert aux liens de /articles et, avec un sous-chemin, à préfixer les liens des pages.
+# Vide ou absente : http://localhost:<port>.
+public_url = "http://localhost:3000"
 
-# Hôte des liens réécrits vers le proxy.
-host = "localhost"
-
-# Port d'écoute du proxy, repris aussi dans les liens réécrits.
+# Port d'écoute du proxy.
 port = 3000
 
 # Site relayé par le proxy (schéma + hôte, sans chemin).

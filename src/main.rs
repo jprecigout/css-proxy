@@ -1,6 +1,6 @@
 // Mini-proxy de réécriture CSS (version Rust).
 // Récupère la page `target`, supprime les éléments correspondant à `remove_css`,
-// injecte `inject_css` dans <head> et sert le résultat sur http://localhost:`port`.
+// injecte `inject_css` dans <head> et sert le résultat sur `public_url` (port `port`).
 // La page /articles liste les articles du flux RSS `feed_url`.
 //
 // Réglages lus dans config.toml (ou le fichier indiqué par CONFIG) :
@@ -25,6 +25,8 @@ use axum::{
 };
 // Réécriture du HTML à la volée, avec des sélecteurs CSS.
 use lol_html::{RewriteStrSettings, element, html_content::ContentType, rewrite_str};
+// Analyse de l'adresse publique du proxy.
+use reqwest::Url;
 
 /// Contenu brut du fichier de configuration, tel qu'écrit dans config.toml.
 ///
@@ -34,10 +36,9 @@ use lol_html::{RewriteStrSettings, element, html_content::ContentType, rewrite_s
 #[derive(Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 struct FileConfig {
-    /// Scheme du proxy
-    scheme: String,
-    /// Host du proxy.
-    host: String,
+    /// Adresse publique du proxy, avec un éventuel chemin (ex. https://serveur/css-proxy).
+    /// Vide : http://localhost:`port`.
+    public_url: String,
     /// Port d'écoute du proxy.
     port: u16,
     /// Site relayé par le proxy (schéma + hôte, sans chemin).
@@ -59,9 +60,10 @@ fn load_config(path: &str) -> Result<FileConfig, String> {
 
 /// État partagé entre toutes les requêtes (enveloppé dans un `Arc` dans `main`).
 struct Config {
-    scheme: String,
-    host: String,
-    port: u16,
+    // Adresse publique du proxy, utilisée pour les liens de /articles.
+    public_url: Url,
+    // Chemin de public_url sans « / » final ("" à la racine), ajouté devant les liens des pages.
+    base_path: String,
     target: String,
     feed_url: String,
     // Logo du site source, trouvé au premier affichage de /articles.
@@ -73,10 +75,11 @@ struct Config {
     client: reqwest::Client,
 }
 
-/// Réécrit une page HTML : ajoute `css` dans <head> et retire les éléments
-/// correspondant aux sélecteurs de `remove`.
+/// Réécrit une page HTML : ajoute `css` dans <head>, retire les éléments
+/// correspondant aux sélecteurs de `remove` et préfixe par `base` les liens
+/// absolus (/chemin) quand le proxy est servi sous un sous-chemin.
 /// Renvoie une erreur si un sélecteur est invalide ou si la réécriture échoue.
-fn rewrite(html: &str, css: &str, remove: &[String]) -> Result<String, String> {
+fn rewrite(html: &str, css: &str, remove: &[String], base: &str) -> Result<String, String> {
     // Balise <style> ajoutée ; l'attribut permet de la repérer dans le code source de la page.
     let style = format!(r#"<style data-injected-by="proxy">{css}</style>"#);
 
@@ -86,6 +89,28 @@ fn rewrite(html: &str, css: &str, remove: &[String]) -> Result<String, String> {
             el.append(&style, ContentType::Html);
             Ok(())
         }));
+    // Sous-chemin : /a/b devient {base}/a/b, sinon le navigateur sortirait du proxy.
+    // Attributs concernés : href, src, action et leurs variantes de chargement
+    // différé (data-src, data-placeholder-src…). Les liens //hote/… ne sont pas touchés.
+    if !base.is_empty() {
+        settings = settings.append_element_content_handler(element!("*", |el| {
+            let links: Vec<_> = el
+                .attributes()
+                .iter()
+                .map(|a| (a.name(), a.value()))
+                .filter(|(name, value)| {
+                    let is_link = ["href", "src", "action"].contains(&name.as_str())
+                        || name.ends_with("-src")
+                        || name.ends_with("-href");
+                    is_link && value.starts_with('/') && !value.starts_with("//")
+                })
+                .collect();
+            for (name, value) in links {
+                el.set_attribute(&name, &format!("{base}{value}"))?;
+            }
+            Ok(())
+        }));
+    }
     // Un gestionnaire par sélecteur à supprimer : l'élément et tout son contenu sont retirés.
     for selector in remove {
         // element! panique sur un sélecteur invalide : on le valide d'abord.
@@ -136,7 +161,7 @@ async fn proxy(State(cfg): State<Arc<Config>>, uri: Uri) -> Response {
         Ok(t) => t,
         Err(e) => return (StatusCode::BAD_GATEWAY, format!("Erreur proxy : {e}")).into_response(),
     };
-    match rewrite(&html, &cfg.inject_css, &cfg.remove) {
+    match rewrite(&html, &cfg.inject_css, &cfg.remove, &cfg.base_path) {
         Ok(out) => (
             status,
             [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
@@ -165,11 +190,23 @@ async fn main() {
         }
     };
     let port = file.port;
+    // Adresse publique : celle de la config, sinon l'adresse locale du proxy.
+    let public_url = if file.public_url.is_empty() {
+        format!("http://localhost:{port}")
+    } else {
+        file.public_url
+    };
+    let public_url = match Url::parse(&public_url) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("public_url invalide « {public_url} » : {e}");
+            std::process::exit(1);
+        }
+    };
     // Passage de la config brute à l'état partagé utilisé par les gestionnaires.
     let cfg = Arc::new(Config {
-        scheme: file.scheme,
-        host: file.host,
-        port: file.port,
+        base_path: public_url.path().trim_end_matches('/').to_owned(),
+        public_url,
         target: file.target,
         feed_url: file.feed_url,
         feed_logo: Default::default(),
@@ -189,7 +226,7 @@ async fn main() {
     });
 
     // Vérifie les sélecteurs au démarrage plutôt qu'à la première requête.
-    if let Err(e) = rewrite("<html></html>", "", &cfg.remove) {
+    if let Err(e) = rewrite("<html></html>", "", &cfg.remove, "") {
         eprintln!("Sélecteur remove_css invalide : {e}");
         std::process::exit(1);
     }
